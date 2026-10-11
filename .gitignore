@@ -1,0 +1,25 @@
+
+# Python environment
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Local datasets (keep the repository lightweight)
+data/raw/
+data/processed/
+
+# Generated model artifacts — review their size before uploading
+# models/*.pkl
+
+# Temporary files
+*.log
+.DS_Store
