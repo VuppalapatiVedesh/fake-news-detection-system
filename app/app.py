@@ -1,8 +1,10 @@
-import streamlit as st
-import joblib
-import numpy as np
 
 from pathlib import Path
+
+import html
+import joblib
+import numpy as np
+import streamlit as st
 
 
 # ============================================================
@@ -13,86 +15,7 @@ st.set_page_config(
     page_title="Fake News Detection System",
     page_icon="📰",
     layout="centered",
-    initial_sidebar_state="collapsed"
-)
-
-
-# ============================================================
-# CUSTOM CSS STYLING
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-        .main-title {
-            text-align: center;
-            color: #6366F1;
-            font-size: 2.4rem;
-            font-weight: 700;
-            margin-bottom: 0.3rem;
-        }
-
-        .subtitle {
-            text-align: center;
-            color: #9CA3AF;
-            font-size: 1rem;
-            margin-bottom: 1.8rem;
-        }
-
-        .result-box {
-            padding: 1.4rem;
-            border-radius: 15px;
-            text-align: center;
-            margin-top: 1.2rem;
-            margin-bottom: 1.4rem;
-        }
-
-        .fake-result {
-            background-color: #FEE2E2;
-            border: 1px solid #FCA5A5;
-            color: #991B1B;
-        }
-
-        .real-result {
-            background-color: #DCFCE7;
-            border: 1px solid #86EFAC;
-            color: #166534;
-        }
-
-        .result-title {
-            font-size: 1.6rem;
-            font-weight: 700;
-        }
-
-        .result-description {
-            font-size: 1rem;
-            margin-top: 0.6rem;
-        }
-
-        .explanation-card {
-            padding: 1rem;
-            border-radius: 12px;
-            background-color: rgba(128, 128, 128, 0.08);
-            border: 1px solid rgba(128, 128, 128, 0.25);
-            margin-bottom: 1rem;
-        }
-
-        .footer {
-            text-align: center;
-            color: #9CA3AF;
-            font-size: 0.85rem;
-            margin-top: 2rem;
-            padding-bottom: 1rem;
-        }
-
-        div.stButton > button {
-            width: 100%;
-            font-weight: 600;
-            padding: 0.65rem;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True
+    initial_sidebar_state="collapsed",
 )
 
 
@@ -107,88 +30,159 @@ VECTORIZER_PATH = BASE_DIR / "models" / "tfidf_vectorizer_compare.pkl"
 
 
 # ============================================================
+# CUSTOM CSS
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+        .main-title {
+            text-align: center;
+            color: #6366F1;
+            font-size: 2.2rem;
+            font-weight: 700;
+            margin-bottom: 0.3rem;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #9CA3AF;
+            margin-bottom: 1.5rem;
+        }
+
+        .result-box {
+            padding: 1.3rem;
+            border-radius: 14px;
+            text-align: center;
+            margin: 1rem 0;
+        }
+
+        .fake-result {
+            background: #FEE2E2;
+            border: 1px solid #FCA5A5;
+            color: #991B1B;
+        }
+
+        .real-result {
+            background: #DCFCE7;
+            border: 1px solid #86EFAC;
+            color: #166534;
+        }
+
+        .result-title {
+            font-size: 1.4rem;
+            font-weight: 700;
+        }
+
+        .explanation-card {
+            padding: 0.8rem;
+            border-radius: 10px;
+            background: rgba(128, 128, 128, 0.08);
+            border: 1px solid rgba(128, 128, 128, 0.25);
+            margin-bottom: 0.6rem;
+        }
+
+        .footer {
+            text-align: center;
+            color: #9CA3AF;
+            font-size: 0.8rem;
+            margin-top: 2rem;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
 # LOAD MODEL AND VECTORIZER
 # ============================================================
 
 @st.cache_resource
 def load_model_and_vectorizer():
-
     model = joblib.load(MODEL_PATH)
     vectorizer = joblib.load(VECTORIZER_PATH)
-
     return model, vectorizer
 
 
+def get_class_name(class_value):
+    """
+    The project's expected label mapping:
+        0 = Fake News
+        1 = Real News
+    """
+    if class_value == 0:
+        return "Fake News"
+
+    if class_value == 1:
+        return "Real News"
+
+    return str(class_value)
+
+
 # ============================================================
-# EXPLAINABLE AI FUNCTION
+# EXPLAIN LINEAR SVM PREDICTIONS
 # ============================================================
 
 def explain_prediction(model, vectorizer, input_text, top_n=10):
     """
-    Explains a Linear SVM prediction using TF-IDF feature
-    values and the model's learned coefficients.
-
-    Positive contribution supports Real News.
-    Negative contribution supports Fake News.
+    For binary Linear SVM:
+    Positive coefficient contributions support model.classes_[1].
+    Negative coefficient contributions support model.classes_[0].
     """
 
-    # Convert input text into TF-IDF features
     text_vector = vectorizer.transform([input_text])
 
-    # Get feature names
-    feature_names = np.array(
-        vectorizer.get_feature_names_out()
-    )
+    if not hasattr(model, "coef_"):
+        return [], [], model.classes_[0], model.classes_[-1]
 
-    # Get model coefficients
+    if len(model.classes_) != 2 or model.coef_.shape[0] != 1:
+        return [], [], model.classes_[0], model.classes_[-1]
+
+    feature_names = vectorizer.get_feature_names_out()
     coefficients = model.coef_[0]
 
-    # Convert sparse vector into a normal array
-    tfidf_values = text_vector.toarray()[0]
+    # Sparse matrix multiplication avoids converting all 50,000
+    # features into a dense array.
+    contributions = np.asarray(
+        text_vector.multiply(coefficients).toarray()
+    ).ravel()
 
-    # Calculate the contribution of every feature
-    contributions = tfidf_values * coefficients
+    present_indices = text_vector.indices
 
-    # Find the largest positive contributions
-    positive_indices = np.argsort(contributions)[::-1]
+    positive_indices = sorted(
+        (
+            i for i in present_indices
+            if contributions[i] > 0
+        ),
+        key=lambda i: contributions[i],
+        reverse=True,
+    )
 
-    # Find the largest negative contributions
-    negative_indices = np.argsort(contributions)
+    negative_indices = sorted(
+        (
+            i for i in present_indices
+            if contributions[i] < 0
+        ),
+        key=lambda i: contributions[i],
+    )
 
-    real_words = []
-    fake_words = []
+    positive_words = [
+        (feature_names[i], float(contributions[i]))
+        for i in positive_indices[:top_n]
+    ]
 
-    # Collect words supporting Real News
-    for index in positive_indices:
+    negative_words = [
+        (feature_names[i], float(contributions[i]))
+        for i in negative_indices[:top_n]
+    ]
 
-        if contributions[index] > 0:
-
-            real_words.append(
-                (
-                    feature_names[index],
-                    float(contributions[index])
-                )
-            )
-
-        if len(real_words) >= top_n:
-            break
-
-    # Collect words supporting Fake News
-    for index in negative_indices:
-
-        if contributions[index] < 0:
-
-            fake_words.append(
-                (
-                    feature_names[index],
-                    float(abs(contributions[index]))
-                )
-            )
-
-        if len(fake_words) >= top_n:
-            break
-
-    return real_words, fake_words
+    return (
+        positive_words,
+        negative_words,
+        model.classes_[1],
+        model.classes_[0],
+    )
 
 
 # ============================================================
@@ -197,357 +191,283 @@ def explain_prediction(model, vectorizer, input_text, top_n=10):
 
 st.markdown(
     '<div class="main-title">📰 Fake News Detection System</div>',
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 st.markdown(
     """
     <div class="subtitle">
-        An intelligent news-classification system using
-        Natural Language Processing and Machine Learning
+        News-text classification using Natural Language Processing
+        and Machine Learning
     </div>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
+)
+
+st.info(
+    "Enter a news headline and article. The system predicts a class "
+    "using patterns learned from its training dataset. It does not "
+    "independently verify news claims."
 )
 
 
 # ============================================================
-# CHECK MODEL FILES
+# VERIFY AND LOAD ARTIFACTS
 # ============================================================
 
 if not MODEL_PATH.exists():
-
-    st.error(
-        f"Linear SVM model file was not found: {MODEL_PATH}"
-    )
-
+    st.error(f"Model file not found: {MODEL_PATH}")
     st.stop()
-
 
 if not VECTORIZER_PATH.exists():
-
-    st.error(
-        f"TF-IDF vectorizer file was not found: {VECTORIZER_PATH}"
-    )
-
+    st.error(f"TF-IDF vectorizer not found: {VECTORIZER_PATH}")
     st.stop()
 
-
-# ============================================================
-# LOAD TRAINED MODEL
-# ============================================================
-
 try:
-
     model, vectorizer = load_model_and_vectorizer()
 
 except Exception as error:
-
-    st.error("The trained model could not be loaded.")
+    st.error("Could not load the saved model or vectorizer.")
     st.exception(error)
-
     st.stop()
 
 
-# ============================================================
-# INTRODUCTION
-# ============================================================
+# Show the saved model's actual class order.
+with st.expander("Model information"):
+    st.write("Classifier:", type(model).__name__)
+    st.write("Model classes:", model.classes_.tolist())
+    st.write("TF-IDF features:", len(vectorizer.get_feature_names_out()))
 
-st.info(
-    "Enter a complete news headline and article. The system "
-    "classifies the text according to patterns learned from "
-    "the training dataset."
-)
+    if len(model.classes_) == 2:
+        st.caption(
+            f"Negative decision scores favor "
+            f"{get_class_name(model.classes_[0])}; positive scores favor "
+            f"{get_class_name(model.classes_[1])}."
+        )
 
 
 # ============================================================
-# INPUT SECTION
+# INPUT FORM
 # ============================================================
 
 st.subheader("Enter News Details")
 
-title = st.text_input(
-    "News Title",
-    placeholder="Example: Government announces a new education policy"
-)
+with st.form("news_prediction_form"):
+    title = st.text_input(
+        "News Title",
+        placeholder="Enter the news headline",
+    )
 
-text = st.text_area(
-    "News Article",
-    height=260,
-    placeholder="Paste the complete news article here..."
-)
+    article_text = st.text_area(
+        "News Article",
+        height=240,
+        placeholder="Paste the complete news article here",
+    )
+
+    submitted = st.form_submit_button(
+        "🔍 Predict News",
+        type="primary",
+        use_container_width=True,
+    )
 
 
 # ============================================================
-# PREDICTION BUTTON
+# PREDICTION
 # ============================================================
 
-if st.button("🔍 Predict News", type="primary"):
-
+if submitted:
     title = title.strip()
-    text = text.strip()
-
-    # --------------------------------------------------------
-    # Validate title
-    # --------------------------------------------------------
+    article_text = article_text.strip()
 
     if not title:
+        st.warning("Please enter a news headline.")
 
-        st.warning("Please enter a news title.")
-
-        st.stop()
-
-    # --------------------------------------------------------
-    # Validate article
-    # --------------------------------------------------------
-
-    if not text:
-
+    elif not article_text:
         st.warning("Please enter the news article text.")
 
-        st.stop()
+    else:
+        combined_text = f"{title} {article_text}"
+        word_count = len(combined_text.split())
 
-    # --------------------------------------------------------
-    # Combine title and article
-    # --------------------------------------------------------
+        if word_count < 20:
+            st.warning(
+                "Please provide at least 20 words for this test. "
+                "Longer text is not necessarily more accurate."
+            )
 
-    combined_text = f"{title} {text}"
-
-    word_count = len(combined_text.split())
-
-    # --------------------------------------------------------
-    # Minimum text-length validation
-    # --------------------------------------------------------
-
-    if word_count < 20:
-
-        st.warning(
-            f"The entered article contains only {word_count} words. "
-            "Please enter at least 20 words for a more meaningful prediction."
-        )
-
-        st.stop()
-
-    # --------------------------------------------------------
-    # Perform prediction
-    # --------------------------------------------------------
-
-    try:
-
-        # Convert input text into TF-IDF features
-        text_vector = vectorizer.transform([combined_text])
-
-        # Predict class
-        prediction = model.predict(text_vector)[0]
-
-        # Get Linear SVM decision score
-        decision_score = float(
-            model.decision_function(text_vector)[0]
-        )
-
-        # Display-only confidence estimate
-        confidence_estimate = min(
-            99.9,
-            50 + abs(decision_score) * 10
-        )
-
-        # Generate explanation
-        real_words, fake_words = explain_prediction(
-            model=model,
-            vectorizer=vectorizer,
-            input_text=combined_text,
-            top_n=10
-        )
-
-        st.divider()
-
-        st.subheader("Prediction Result")
-
-        # ----------------------------------------------------
-        # Display prediction result
-        # ----------------------------------------------------
-
-        if prediction == 0:
-
-            st.markdown(
-                """
-                <div class="result-box fake-result">
-                    <div class="result-title">
-                        ⚠️ Potentially Fake News
-                    </div>
-                    <div class="result-description">
-                        The article resembles fake-news examples
-                        learned from the training dataset.
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
+        elif len(model.classes_) != 2:
+            st.error(
+                "This application expects a binary classification model."
             )
 
         else:
+            try:
+                text_vector = vectorizer.transform([combined_text])
 
-            st.markdown(
-                """
-                <div class="result-box real-result">
-                    <div class="result-title">
-                        ✅ Potentially Real News
-                    </div>
-                    <div class="result-description">
-                        The article resembles real-news examples
-                        learned from the training dataset.
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+                # Use the model's own prediction.
+                prediction = model.predict(text_vector)[0]
 
-        # ----------------------------------------------------
-        # Display metrics
-        # ----------------------------------------------------
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-
-            st.metric(
-                "Confidence Estimate",
-                f"{confidence_estimate:.2f}%"
-            )
-
-        with col2:
-
-            st.metric(
-                "Input Word Count",
-                word_count
-            )
-
-        st.caption(
-            "The confidence value is an estimate derived from "
-            "the SVM decision score. It is not a calibrated probability."
-        )
-
-        # ----------------------------------------------------
-        # Explainable AI section
-        # ----------------------------------------------------
-
-        st.divider()
-
-        st.subheader("🔎 Prediction Explanation")
-
-        st.write(
-            "These words had the strongest influence on the model's "
-            "classification for this input."
-        )
-
-        explanation_col1, explanation_col2 = st.columns(2)
-
-        with explanation_col1:
-
-            st.markdown("### 🟢 Real-News Indicators")
-
-            if real_words:
-
-                for word, contribution in real_words:
-
-                    st.markdown(
-                        f"""
-                        <div class="explanation-card">
-                            <strong>{word}</strong><br>
-                            <small>
-                                Positive contribution:
-                                {contribution:.4f}
-                            </small>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-
-            else:
-
-                st.info(
-                    "No strong real-news indicators were identified."
+                # For a binary Linear SVM, a positive decision score
+                # favors classes_[1], and a negative score favors classes_[0].
+                decision_score = float(
+                    np.asarray(
+                        model.decision_function(text_vector)
+                    ).ravel()[0]
                 )
 
-        with explanation_col2:
+                predicted_name = get_class_name(prediction)
 
-            st.markdown("### 🔴 Fake-News Indicators")
+                st.divider()
+                st.subheader("Prediction Result")
 
-            if fake_words:
-
-                for word, contribution in fake_words:
-
+                if prediction == 0:
                     st.markdown(
-                        f"""
-                        <div class="explanation-card">
-                            <strong>{word}</strong><br>
-                            <small>
-                                Negative contribution:
-                                {contribution:.4f}
-                            </small>
+                        """
+                        <div class="result-box fake-result">
+                            <div class="result-title">
+                                ⚠️ Potentially Fake News
+                            </div>
+                            <p>
+                                The model classified this text as Fake News.
+                                This is not proof that the article is false.
+                            </p>
                         </div>
                         """,
-                        unsafe_allow_html=True
+                        unsafe_allow_html=True,
                     )
 
-            else:
+                elif prediction == 1:
+                    st.markdown(
+                        """
+                        <div class="result-box real-result">
+                            <div class="result-title">
+                                ✅ Potentially Real News
+                            </div>
+                            <p>
+                                The model classified this text as Real News.
+                                This is not independent verification of its claims.
+                            </p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
-                st.info(
-                    "No strong fake-news indicators were identified."
+                else:
+                    st.warning(f"Predicted class: {predicted_name}")
+
+                # Do not call the decision score a probability.
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.metric(
+                        "SVM Decision Score",
+                        f"{decision_score:.4f}",
+                    )
+
+                with col2:
+                    st.metric("Input Word Count", word_count)
+
+                st.caption(
+                    "The SVM decision score is not a probability or "
+                    "a calibrated confidence percentage. Its sign and "
+                    "magnitude are meaningful relative to this model's "
+                    "decision boundary."
                 )
 
-        # ----------------------------------------------------
-        # Detailed prediction information
-        # ----------------------------------------------------
+                # ------------------------------------------------
+                # EXPLANATION
+                # ------------------------------------------------
 
-        st.divider()
+                st.divider()
+                st.subheader("🔎 Prediction Explanation")
 
-        with st.expander("View Prediction Details"):
+                (
+                    positive_words,
+                    negative_words,
+                    positive_class,
+                    negative_class,
+                ) = explain_prediction(
+                    model,
+                    vectorizer,
+                    combined_text,
+                    top_n=10,
+                )
 
-            predicted_class = (
-                "Fake News"
-                if prediction == 0
-                else "Real News"
-            )
+                st.write(
+                    f"**Positive contributions** favor "
+                    f"**{get_class_name(positive_class)}**."
+                )
+                st.write(
+                    f"**Negative contributions** favor "
+                    f"**{get_class_name(negative_class)}**."
+                )
 
-            st.write(
-                f"**Predicted class:** {predicted_class}"
-            )
+                left_col, right_col = st.columns(2)
 
-            st.write(
-                f"**SVM decision score:** {decision_score:.4f}"
-            )
+                with left_col:
+                    st.markdown(
+                        f"#### 🟢 Supports {get_class_name(positive_class)}"
+                    )
 
-            st.write(
-                "**Feature representation:** TF-IDF"
-            )
+                    if positive_words:
+                        for word, contribution in positive_words:
+                            safe_word = html.escape(word)
 
-            st.write(
-                "**Classification algorithm:** Linear SVM"
-            )
+                            st.markdown(
+                                f"""
+                                <div class="explanation-card">
+                                    <strong>{safe_word}</strong><br>
+                                    Contribution: {contribution:+.4f}
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.info("No positive feature contributions found.")
 
-            st.write(
-                "**Training dataset:** ISOT Fake News Dataset"
-            )
+                with right_col:
+                    st.markdown(
+                        f"#### 🔴 Supports {get_class_name(negative_class)}"
+                    )
 
-            st.write(
-                f"**Number of extracted features:** "
-                f"{text_vector.shape[1]}"
-            )
+                    if negative_words:
+                        for word, contribution in negative_words:
+                            safe_word = html.escape(word)
 
-        # ----------------------------------------------------
-        # Disclaimer
-        # ----------------------------------------------------
+                            st.markdown(
+                                f"""
+                                <div class="explanation-card">
+                                    <strong>{safe_word}</strong><br>
+                                    Contribution: {contribution:+.4f}
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+                    else:
+                        st.info("No negative feature contributions found.")
 
-        st.warning(
-            "This result is a machine-learning classification, "
-            "not an independent fact-check. Always verify important "
-            "claims using reliable sources and official information."
-        )
+                # ------------------------------------------------
+                # DETAILS
+                # ------------------------------------------------
 
-    except Exception as error:
+                with st.expander("View Prediction Details"):
+                    st.write("**Predicted class:**", predicted_name)
+                    st.write("**Model classes:**", model.classes_.tolist())
+                    st.write("**SVM decision score:**", f"{decision_score:.6f}")
+                    st.write("**Feature representation:** TF-IDF")
+                    st.write("**Classifier:** Linear SVM")
+                    st.write("**Extracted feature count:**", text_vector.shape[1])
+                    st.write("**Training dataset:** ISOT Fake News Dataset")
 
-        st.error("An error occurred during prediction.")
-        st.exception(error)
+                st.warning(
+                    "This system classifies text using learned patterns. "
+                    "It does not independently fact-check claims. Verify "
+                    "important news using reliable, independent sources."
+                )
+
+            except Exception as error:
+                st.error("An error occurred while predicting the article.")
+                st.exception(error)
 
 
 # ============================================================
@@ -563,5 +483,5 @@ st.markdown(
         Fake News Detection System — Academic Project
     </div>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
